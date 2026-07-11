@@ -1,0 +1,55 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * RK3588 EVB7 V11 - AMP variant
+ * Linux runs on 7 cores; cpu_l3 (MPIDR 0x300) is handed to an AMP firmware.
+ * Ported from rk3588-evb1-lp4-v10-linux-amp.dts (AMP deltas only).
+ */
+
+/dts-v1/;
+
+#include "rk3588-evb7-v11.dtsi"
+#include "rk3588-evb7-v11-imx415.dtsi"
+#include "rk3588-linux.dtsi"
+#include "rk3588-amp.dtsi"
+
+/ {
+model = "Rockchip RK3588 EVB7 V11 AMP Board";
+compatible = "rockchip,rk3588-evb7-v11", "rockchip,rk3588";
+
+cpus {
+cpu-map {
+cluster0 {
+/delete-node/ core3;
+};
+};
+};
+
+reserved-memory {
+#address-cells = <2>;
+#size-cells = <2>;
+ranges;
+
+/* Dedicated AMP core region: high, no-map, clear of kernel/M0/OP-TEE/CMA */
+amp_core: amp-core@30000000 {
+reg = <0x0 0x30000000 0x0 0x01000000>;
+no-map;
+};
+
+/* rpmsg/shared-mem for remote core; relocated off 0x8200000 (overlapped OP-TEE) */
+amp_shmem: amp-shmem@31000000 {
+reg = <0x0 0x31000000 0x0 0x00400000>;
+no-map;
+};
+};
+};
+
+&arm_pmu {
+interrupt-affinity = <&cpu_l0>, <&cpu_l1>, <&cpu_l2>,
+<&cpu_b0>, <&cpu_b1>, <&cpu_b2>, <&cpu_b3>;
+};
+
+/* Drop the stock amp-shmem@8200000 (overlaps OP-TEE @0x08400000); replaced above */
+/delete-node/ &amp_shmem_reserved;
+
+/* cpu_l3 is owned by the AMP firmware; remove from Linux */
+/delete-node/ &cpu_l3;
