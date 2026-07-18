@@ -380,6 +380,22 @@ config RPMSG_TTY
 	  To compile this driver as a module, choose M here: the module will be
 	  called rpmsg_tty.
 
+config RPMSG_NSH_TTY
+	tristate "RPMSG tty driver for NuttX nsh console (uart_rpmsg framing)"
+	depends on RPMSG
+	help
+	  Export a NuttX (openvela) uart_rpmsg console endpoint as a tty device
+	  (/dev/ttyNSHx), so user space (microcom/cu) can open an interactive
+	  NuttX nsh shell over rpmsg -- sharing one physical UART between Linux
+	  and an AMP remote core.
+
+	  Unlike the generic RPMSG_TTY driver (raw bytes, "rpmsg-tty" service),
+	  this one speaks NuttX's uart_rpmsg header framing and binds the
+	  "rpmsg-ttyproxy" service. It uses a distinct device name (ttyNSH) so it
+	  can coexist with RPMSG_TTY.
+
+	  To compile as a module choose M here: the module is called rpmsg_nsh_tty.
+
 endif # TTY
 
 source "drivers/tty/serdev/Kconfig"
