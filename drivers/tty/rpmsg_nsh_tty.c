@@ -358,8 +358,14 @@ static void rpmsg_nsh_tty_remove(struct rpmsg_device *rpdev)
 	tty_port_put(&cport->port);
 }
 
+/* One entry per NuttX instance that exports a console. The name is what the
+ * remote passes to uart_rpmsg_init(), prefixed with "rpmsg-tty": "proxy" for the
+ * NuttX on cpu_l3, "m0" for the one on the PMU Cortex-M0. They arrive on
+ * different virtio buses, so each gets its own /dev/ttyNSHx.
+ */
 static struct rpmsg_device_id rpmsg_nsh_tty_id_table[] = {
 	{ .name = "rpmsg-ttyproxy" },
+	{ .name = "rpmsg-ttym0" },
 	{ /* sentinel */ },
 };
 MODULE_DEVICE_TABLE(rpmsg, rpmsg_nsh_tty_id_table);
