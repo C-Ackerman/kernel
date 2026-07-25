@@ -40,8 +40,70 @@ amp_shmem: amp-shmem@31000000 {
 reg = <0x0 0x31000000 0x0 0x00400000>;
 no-map;
 };
+
+/*
+ * rpmsg link towards the PMU Cortex-M0, carved out of the second half of
+ * mcu@7a00000 (shrunk to 1MB below) so no new memory has to be reserved.
+ * The M0 reaches these same bytes through its off-chip DDR window, which
+ * the AMP FIT aims at 0x07b00000 via exsram_start.
+ *
+ * Sizes follow include/linux/rpmsg/rockchip_rpmsg.h: the driver places
+ * vring0 at the start of this region and vring1 one RPMSG_VRING_SIZE
+ * (0x8000) later, so RPMSG_VRING_OVERHEAD = 0x10000 is the minimum.
+ */
+m0_rpmsg_reserved: m0-rpmsg@7b00000 {
+reg = <0x0 0x07b00000 0x0 0x00010000>;
+no-map;
+};
+
+m0_rpmsg_dma_reserved: m0-rpmsg-dma@7b10000 {
+compatible = "shared-dma-pool";
+reg = <0x0 0x07b10000 0x0 0x00040000>;
+no-map;
 };
 };
+
+/*
+ * Second rpmsg instance, for the M0. rockchip_rpmsg_mbox is a plain platform
+ * driver whose vring addresses come from each node's own reg, so a second
+ * node probes as an independent link.
+ *
+ * It shares mailbox0 with the cpu_l3 link but uses the two free channels:
+ * cpu_l3 holds ch0 (its rx) and ch3 (its tx), so this link takes ch1 and ch2.
+ *
+ * mailbox1 was tried first and does not work: its registers are inaccessible,
+ * and rockchip_mbox_startup() died with a synchronous external abort during
+ * probe, which killed kernel_init and with it the whole boot. Its probe-time
+ * "version: 0x0100" message is not evidence to the contrary - for the 1.0.0
+ * controller that is a driver constant, so probe never reads a register.
+ *
+ * The link-id packs a 4-bit master cpu id and a 4-bit remote id; the RK3576 AMP
+ * dtsi documents the MCU as remote 4, so 0x04.
+ */
+rpmsg_m0: rpmsg@7b00000 {
+compatible = "rockchip,rpmsg";
+mbox-names = "rpmsg-rx", "rpmsg-tx";
+mboxes = <&mailbox0 1 &mailbox0 2>;
+rockchip,vdev-nums = <1>;
+rockchip,link-id = <0x04>;
+reg = <0x0 0x07b00000 0x0 0x00010000>;
+memory-region = <&m0_rpmsg_dma_reserved>;
+status = "okay";
+};
+};
+
+/* Shrink the M0 carveout to 1MB: the upper half now holds the rpmsg vrings and
+ * buffer pool declared above, and the M0 firmware caps its heap accordingly
+ * (CONFIG_RAM_SIZE = 1MB) so it cannot grow into them.
+ */
+&mcu_reserved {
+reg = <0x0 0x07a00000 0x0 0x00100000>;
+};
+
+/* mailbox1 deliberately left disabled: its registers are inaccessible on this
+ * SoC and touching them aborts. Both rpmsg links run on mailbox0, which the
+ * shared dtsi already enables.
+ */
 
 &arm_pmu {
 interrupt-affinity = <&cpu_l0>, <&cpu_l1>, <&cpu_l2>,
