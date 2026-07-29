@@ -110,6 +110,114 @@ interrupt-affinity = <&cpu_l0>, <&cpu_l1>, <&cpu_l2>,
 <&cpu_b0>, <&cpu_b1>, <&cpu_b2>, <&cpu_b3>;
 };
 
+/*
+ * Hand vp3's Esmart3 window to the AMP core.
+ *
+ * vp3 drives the MIPI-DSI panel and Linux keeps doing so: it owns the mode, the
+ * clocks, the DSI PHY and the panel. What it gives up is one overlay window,
+ * which the AMP core then points at its own framebuffer. The alternative -
+ * taking the whole video port - would mean reimplementing all of that
+ * initialisation on a core that has no display driver at all.
+ *
+ * Three properties, each doing something different:
+ *
+ * plane-mask has to be spelled out for every video port, not just vp3.
+ * vop2_plane_mask_check() (rockchip_drm_vop2.c:16295) requires the union of all
+ * four masks to equal the SoC's full window set - 0x3cf here - and on any
+ * mismatch it prints "use default plane mask" and calls vop2_plane_mask_assign(),
+ * which throws away primary-plane too. Leaving vp0..vp2 unset (mask 0) or
+ * dropping Esmart3 from vp3 both fail that check, so the assignment below simply
+ * restates the driver's own default distribution. Only primary-plane and
+ * reserved-plane actually differ from stock.
+ *
+ * Keeping Esmart3 in the mask is not just a way to satisfy that check - almost
+ * everything the other core needs falls out of it, because the driver derives
+ * those things from win_mask rather than from how many windows Linux is
+ * actually using:
+ *
+ *   - vop2_layer_map_initial() (rockchip_drm_vop2.c:4585) walks win_mask at
+ *     probe and assigns hardware layers in order. vp0..vp2 take two windows
+ *     each, so vp3 gets layers 6 and 7, and Esmart3 - the higher phys_id - lands
+ *     on 7, the topmost. The same loop sets win_vp_id[Esmart3] = 3.
+ *   - vop2_calc_bg_ovl_and_port_mux() (:12398) sizes each port's slice of the
+ *     mixer chain from hweight32(win_mask), and the last video port is hardcoded
+ *     to take everything remaining (:12437). So layer 7 is in vp3's blend chain.
+ *   - vop2_setup_alpha()'s tail loop (:11985) runs to hweight32(win_mask) and
+ *     configures the mixer for layer 7 even though Linux has no plane there. For
+ *     a source with no alpha channel the values it writes are the same ones it
+ *     would write for a real XRGB8888 plane: an opaque overwrite.
+ *
+ * primary-plane moves to Cluster3 because Esmart3 was it, and a CRTC without a
+ * primary plane cannot be given a framebuffer, which means no modeset and no
+ * timing on the panel at all.
+ *
+ * reserved-plane does exactly one thing on this SoC, and it is the one thing
+ * that matters: it switches Linux's commits on vp3 from the per-port cfg_done
+ * register to the per-window one (rockchip_drm_vop2.c:1961), and the bitmask
+ * written there only ever contains windows Linux itself touched in that commit
+ * (:2307). Register writes made from the other core therefore sit in the VOP's
+ * shadow copy until that core commits them, instead of being latched by whatever
+ * frame Linux happens to be pushing.
+ *
+ * It does not also do the layer routing that the same property does on RK3576:
+ * that code (:12580) is inside vop3_setup_layer_sel_for_vp(), and is_vop3()
+ * returns false for RK3588 (:1260), so RK3588 goes through
+ * vop2_setup_layer_mixer_for_vp() (:13259), which has no notion of a reserved
+ * plane. Hence the win_mask reasoning above.
+ *
+ * Two consequences of Esmart3 staying in the mask, both accepted:
+ * vop2_disable_all_planes_for_crtc() walks win_mask and does not skip reserved
+ * planes, so a modeset or CRTC shutdown (call sites 5996/9078/10630/13949) will
+ * switch the window off - the other core reprograms it every frame, so that
+ * costs one frame rather than the display. And Linux still registers a DRM plane
+ * for Esmart3, so nothing but discipline stops a client from binding it; there
+ * is no compositor on this target.
+ *
+ * The window's power domain is not a worry on this SoC: the driver turns PD_ESMART
+ * on at init and refuses to control it dynamically
+ * (rockchip_drm_vop2.c:4781 and vop2_ignore_dynamic_control_sub_pd()).
+ */
+
+&vp0 {
+	rockchip,plane-mask = <((1 << ROCKCHIP_VOP2_CLUSTER0) | (1 << ROCKCHIP_VOP2_ESMART0))>;
+	rockchip,primary-plane = <ROCKCHIP_VOP2_ESMART0>;
+};
+
+&vp1 {
+	rockchip,plane-mask = <((1 << ROCKCHIP_VOP2_CLUSTER1) | (1 << ROCKCHIP_VOP2_ESMART1))>;
+	rockchip,primary-plane = <ROCKCHIP_VOP2_ESMART1>;
+};
+
+&vp2 {
+	rockchip,plane-mask = <((1 << ROCKCHIP_VOP2_CLUSTER2) | (1 << ROCKCHIP_VOP2_ESMART2))>;
+	rockchip,primary-plane = <ROCKCHIP_VOP2_ESMART2>;
+};
+
+&vp3 {
+	rockchip,plane-mask = <((1 << ROCKCHIP_VOP2_CLUSTER3) | (1 << ROCKCHIP_VOP2_ESMART3))>;
+	rockchip,primary-plane = <ROCKCHIP_VOP2_CLUSTER3>;
+	rockchip,reserved-plane = <ROCKCHIP_VOP2_ESMART3>;
+};
+
+/*
+ * The VOP's IOMMU has to go, because a plane driven from another core can only be
+ * given a physical address. With no IOMMU the DRM side does not merely tolerate
+ * that - it switches to it: rockchip_gem_create_object() forces contiguous
+ * allocation and programs dma_handle rather than an IOVA when private->domain is
+ * NULL (rockchip_drm_gem.c:455). Both sides then speak physical addresses.
+ *
+ * Evidence that this is needed rather than assumed: with the IOMMU on, the plane's
+ * address reads back as 0x0 in /sys/kernel/debug/dri/0/summary, which cannot be a
+ * physical address on this board - the first IOVA handed out is zero.
+ *
+ * Cost: every DRM buffer becomes CMA. There is a 256MB CMA pool and no compositor
+ * running here, and video decode has its own IOMMU, so nothing else is affected.
+ */
+
+&vop_mmu {
+	status = "disabled";
+};
+
 /* Drop the stock amp-shmem@8200000 (overlaps OP-TEE @0x08400000); replaced above */
 /delete-node/ &amp_shmem_reserved;
 
