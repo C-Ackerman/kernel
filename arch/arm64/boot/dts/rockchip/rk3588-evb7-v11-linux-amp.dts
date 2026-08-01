@@ -35,9 +35,26 @@ reg = <0x0 0x30000000 0x0 0x01000000>;
 no-map;
 };
 
-/* rpmsg/shared-mem for remote core; relocated off 0x8200000 (overlapped OP-TEE) */
+/*
+ * rpmsg/shared-mem for remote core; relocated off 0x8200000 (overlapped OP-TEE).
+ *
+ * 8MB, grown from 4MB so that a camera frame filling the 1080x1920 panel fits.
+ * The remote's framebuffer is 540x960 and the VOP scales it, so a full-screen
+ * frame is 540*960*4 = 2073600 bytes; two of those plus the descriptor pages do
+ * not fit in 4MB. The frame used to be 512x288 centred with a black border,
+ * covering 28 percent of the screen, because that was what a 1MB slot held.
+ *
+ * The remote maps this region from a constant in its own build and never reads
+ * this node, so the two sizes have to be changed together: firmware expecting 8MB
+ * against a 4MB reservation would map four megabytes Linux believes it owns.
+ * AMP_SHM_SIZE in boards/arm64/rk3588/evb7-amp/src/evb7_amp_shm.h is the other
+ * half of this pair.
+ *
+ * Room to grow was checked rather than assumed: amp-core above ends exactly at
+ * 0x31000000 and nothing else in this tree is placed below 0x31800000.
+ */
 amp_shmem: amp-shmem@31000000 {
-reg = <0x0 0x31000000 0x0 0x00400000>;
+reg = <0x0 0x31000000 0x0 0x00800000>;
 no-map;
 };
 
